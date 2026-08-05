@@ -1,15 +1,15 @@
 # Trained checkpoint results
 
-训练日期：2026-08-05。运行环境：NVIDIA GeForce RTX 5070 12GB、PyTorch 2.11.0 + CUDA 12.8。
+Training date: 2026-08-05. Environment: NVIDIA GeForce RTX 5070 12GB, PyTorch 2.11.0, and CUDA 12.8.
 
-本 workspace 中已经生成两个 checkpoint（`checkpoints/` 被 Git 忽略，避免误提交二进制文件）：
+Two checkpoints have been generated in the current workspace. The `checkpoints/` directory is ignored by Git to avoid accidentally committing binary files.
 
-| checkpoint | 大小 | 最佳 epoch | 训练时 validation-subset exact |
+| Checkpoint | Size | Best epoch | Training validation-subset exact match |
 |---|---:|---:|---:|
 | `checkpoints/yt_to_human.pt` | 2.7 MB | 37 | 99.6% |
 | `checkpoints/human_to_yt.pt` | 2.7 MB | 40 | 100.0% |
 
-SHA-256：
+SHA-256 hashes:
 
 ```text
 81db3db7977b61ae8af014d210a6c5b4e47e3ef579f6568b706b36eb7a2fcc0e  checkpoints/yt_to_human.pt
@@ -18,16 +18,16 @@ SHA-256：
 
 ## Training configuration
 
-- 8,000 个唯一合成 Tableau，train/val/test 为 0.8/0.1/0.1；
-- row 与 col 两种 human-readable target；
-- 最多 5 行、8 列、20 个格子，值域 1..50；
-- 每个模型 671,167 个参数；
-- `d_model=128`、8 heads、2 层 encoder、2 层 decoder、FFN 256；
-- shared source/target/output token weights，dropout 0.1；
-- batch size 256，AdamW，learning rate 8e-4，最多 40 epochs；
-- seed 42，训练设备 `cuda:0`。
+- 8,000 unique synthetic tableaux with a 0.8/0.1/0.1 train/validation/test split.
+- Both row and column human-readable targets.
+- At most 5 rows, 8 columns, and 20 cells, with values in `1..50`.
+- 671,167 parameters per model.
+- `d_model=128`, 8 attention heads, 2 encoder layers, 2 decoder layers, and FFN dimension 256.
+- Shared source, target, and output token weights with dropout 0.1.
+- Batch size 256, AdamW, learning rate `8e-4`, and at most 40 epochs.
+- Seed 42 and training device `cuda:0`.
 
-复现命令：
+Reproduction command:
 
 ```bash
 yt-train \
@@ -58,21 +58,21 @@ yt-train \
 
 ## Full held-out evaluation
 
-这里的每个方向都使用全部 1,600 条 held-out examples，不是训练日志中的 256 条 autoregressive validation 子集。
+Each direction below was evaluated on all 1,600 held-out examples, rather than the 256-example autoregressive validation subset used in training logs.
 
-| direction | exact match | semantic accuracy | token accuracy | invalid output |
+| Direction | Exact match | Semantic accuracy | Token accuracy | Invalid output |
 |---|---:|---:|---:|---:|
-| YT → human | 99.5625% | 99.5625% | 99.9845% | 0.1250% |
-| human → YT | 99.4375% | 99.4375% | 99.9814% | 0.0625% |
+| YT to human | 99.5625% | 99.5625% | 99.9845% | 0.1250% |
+| Human to YT | 99.4375% | 99.4375% | 99.9814% | 0.0625% |
 
-在 100 个唯一 Tableau、row/col 共 200 次 `raw → human → raw` round trip 上：
+On 100 unique tableaux, covering 200 row/column `raw -> human -> raw` round trips:
 
-- exact match：99.5%；
-- invalid pipeline rate：0%。
+- Exact match: 99.5%.
+- Invalid pipeline rate: 0%.
 
 ## Screenshot example
 
-模型实际输出：
+Actual model output:
 
 ```text
 input:  [YT start] 2 3 5 | 1 4 [YT end]
