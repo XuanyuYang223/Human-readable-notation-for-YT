@@ -38,8 +38,12 @@ class TableauTests(unittest.TestCase):
 class NotationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tableau = Tableau(((2, 3, 5), (1, 4)))
+        self.coord = (
+            "[YT coord start] (1,1) : 2 | (1,2) : 3 | (1,3) : 5 | "
+            "(2,1) : 1 | (2,2) : 4 [YT coord end]"
+        )
 
-    def test_format_all_three_surface_forms(self) -> None:
+    def test_format_all_four_surface_forms(self) -> None:
         self.assertEqual(
             format_notation(self.tableau, "raw"),
             "[YT start] 2 3 5 | 1 4 [YT end]",
@@ -52,12 +56,14 @@ class NotationTests(unittest.TestCase):
             format_notation(self.tableau, "col"),
             "[YT col start] 2 1 | 3 4 | 5 [YT col end]",
         )
+        self.assertEqual(format_notation(self.tableau, "coord"), self.coord)
 
-    def test_parse_all_three_forms(self) -> None:
+    def test_parse_all_four_forms(self) -> None:
         examples = {
             "raw": "[YT start] 2 3 5 | 1 4 [YT end]",
             "row": "[YT row start] 2 3 5 | 1 4 [YT row end]",
             "col": "[YT col start] 2 1 | 3 4 | 5 [YT col end]",
+            "coord": self.coord,
         }
         for expected_kind, text in examples.items():
             with self.subTest(kind=expected_kind):
@@ -68,7 +74,7 @@ class NotationTests(unittest.TestCase):
 
     def test_empty_tableau_has_canonical_round_trip(self) -> None:
         tableau = Tableau(())
-        for kind in ("raw", "row", "col"):
+        for kind in ("raw", "row", "col", "coord"):
             with self.subTest(kind=kind):
                 text = format_notation(tableau, kind)  # type: ignore[arg-type]
                 reparsed, reparsed_kind = parse_notation(text)
@@ -87,6 +93,30 @@ class NotationTests(unittest.TestCase):
             "[YT start] 2 3 [YT row end]",
             "[unknown] 2 [unknown end]",
             "[YT start] 2 | | 1 [YT end]",
+            "[YT coord start] (01,1) : 2 [YT coord end]",
+            "[YT coord start] (1, 1) : 2 [YT coord end]",
+            "[YT coord start] (1,1): 2 [YT coord end]",
+            "[YT coord start] (0,1) : 2 [YT coord end]",
+            "[YT coord start] (51,1) : 2 [YT coord end]",
+            "[YT coord start] (1,1) : 51 [YT coord end]",
+            "[YT coord start] (1,2) : 2 [YT coord end]",  # not one-based from (1,1)
+            (
+                "[YT coord start] (1,1) : 2 | (1,3) : 3 "
+                "[YT coord end]"
+            ),  # skipped matrix position
+            (
+                "[YT coord start] (1,1) : 2 | (1,1) : 3 "
+                "[YT coord end]"
+            ),  # duplicate matrix position
+            (
+                "[YT coord start] (1,1) : 2 | (3,1) : 3 "
+                "[YT coord end]"
+            ),  # skipped row
+            (
+                "[YT coord start] (1,1) : 2 | (2,1) : 3 | (2,2) : 4 "
+                "[YT coord end]"
+            ),  # increasing row lengths
+            "[YT coord start] (1,1) : 2 [YT col end]",
         )
         for text in invalid:
             with self.subTest(text=text), self.assertRaises(ValueError):
@@ -99,6 +129,11 @@ class NotationTests(unittest.TestCase):
             format_notation(((1,),), "raw")  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
             parse_notation(123)  # type: ignore[arg-type]
+
+    def test_coord_rejects_shapes_whose_indices_have_no_fixed_number_token(self) -> None:
+        too_wide = Tableau((tuple(1 for _ in range(51)),))
+        with self.assertRaisesRegex(ValueError, "coordinate indices"):
+            format_notation(too_wide, "coord")
 
 
 if __name__ == "__main__":

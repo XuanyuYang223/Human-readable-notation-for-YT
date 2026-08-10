@@ -8,7 +8,7 @@ import unittest
 import torch
 from torch import Tensor, nn
 
-from yt_transformer.infer import translate
+from yt_transformer.infer import build_parser, translate
 from yt_transformer.tokenizer import HandmadeTokenizer
 
 
@@ -42,6 +42,10 @@ class TranslateTests(unittest.TestCase):
         self.raw = "[YT start] 2 3 5 | 1 4 [YT end]"
         self.row = "[YT row start] 2 3 5 | 1 4 [YT row end]"
         self.col = "[YT col start] 2 1 | 3 4 | 5 [YT col end]"
+        self.coord = (
+            "[YT coord start] (1,1) : 2 | (1,2) : 3 | (1,3) : 5 | "
+            "(2,1) : 1 | (2,2) : 4 [YT coord end]"
+        )
 
     def _model_for(self, output: str, *, max_seq_len: int = 64) -> ControlledDecodeModel:
         return ControlledDecodeModel(
@@ -75,8 +79,24 @@ class TranslateTests(unittest.TestCase):
             ),
         )
 
-    def test_valid_reverse_translation_accepts_both_human_markers(self) -> None:
-        for human in (self.row, self.col):
+    def test_coordinate_forward_translation_uses_coordinate_task_token(self) -> None:
+        model = self._model_for(self.coord)
+
+        result = translate(
+            model,  # type: ignore[arg-type]
+            self.tokenizer,
+            "yt_to_human",
+            self.raw,
+            style="coord",
+            max_new_tokens=63,
+        )
+
+        self.assertEqual(result, self.coord)
+        assert model.last_source is not None
+        self.assertEqual(model.last_source[0, 1].item(), self.tokenizer.to_coord_id)
+
+    def test_valid_reverse_translation_accepts_all_human_markers(self) -> None:
+        for human in (self.row, self.col, self.coord):
             with self.subTest(human=human):
                 model = self._model_for(self.raw)
                 self.assertEqual(
@@ -91,7 +111,11 @@ class TranslateTests(unittest.TestCase):
                 assert model.last_source is not None
                 self.assertNotIn(
                     model.last_source[0, 1].item(),
-                    (self.tokenizer.to_row_id, self.tokenizer.to_col_id),
+                    (
+                        self.tokenizer.to_row_id,
+                        self.tokenizer.to_col_id,
+                        self.tokenizer.to_coord_id,
+                    ),
                 )
 
     def test_input_wrapper_must_match_checkpoint_direction(self) -> None:
@@ -113,7 +137,7 @@ class TranslateTests(unittest.TestCase):
                 self.raw,
             )
 
-        with self.assertRaisesRegex(ValueError, "style must be row or col"):
+        with self.assertRaisesRegex(ValueError, "style must be row, col, or coord"):
             translate(
                 forward,  # type: ignore[arg-type]
                 self.tokenizer,
@@ -121,6 +145,42 @@ class TranslateTests(unittest.TestCase):
                 self.raw,
                 style="diagonal",  # type: ignore[arg-type]
             )
+
+        with self.assertRaisesRegex(ValueError, "yt-rsk-infer"):
+            translate(
+                forward,  # type: ignore[arg-type]
+                self.tokenizer,
+                "perm_to_yt",
+                "[perm start] 2 1 [perm end]",
+            )
+
+    def test_checkpoint_rejects_human_styles_it_was_not_trained_for(self) -> None:
+        forward = self._model_for(self.row)
+        forward.supported_human_kinds = ("coord",)
+        with self.assertRaisesRegex(ValueError, "not trained to generate 'row'"):
+            translate(
+                forward,  # type: ignore[arg-type]
+                self.tokenizer,
+                "yt_to_human",
+                self.raw,
+                style="row",
+            )
+
+        reverse = self._model_for(self.raw)
+        reverse.supported_human_kinds = ("coord",)
+        with self.assertRaisesRegex(ValueError, "not trained to read 'row'"):
+            translate(
+                reverse,  # type: ignore[arg-type]
+                self.tokenizer,
+                "human_to_yt",
+                self.row,
+            )
+
+    def test_cli_accepts_coordinate_style(self) -> None:
+        args = build_parser().parse_args(
+            ["--checkpoint", "model.pt", "--text", self.raw, "--style", "coord"]
+        )
+        self.assertEqual(args.style, "coord")
 
     def test_missing_eos_reports_generated_symbolic_tokens(self) -> None:
         generated_without_eos = self.tokenizer.encode(self.row)[:-1]

@@ -29,18 +29,31 @@ def translate(
 ) -> str:
     """Translate one canonical notation string with a trained model."""
 
+    if direction == "perm_to_yt":
+        raise ValueError(
+            "perm_to_yt uses infer_rsk_tableau (or the yt-rsk-infer command)"
+        )
     _, source_kind = parse_notation(text)
+    supported_kinds = getattr(model, "supported_human_kinds", None)
     if direction == "yt_to_human":
         if source_kind != "raw":
             raise ValueError("yt_to_human expects input wrapped by [YT start]/[YT end]")
-        if style not in ("row", "col"):
-            raise ValueError("style must be row or col")
+        if style not in ("row", "col", "coord"):
+            raise ValueError("style must be row, col, or coord")
+        if supported_kinds is not None and style not in supported_kinds:
+            raise ValueError(
+                f"checkpoint was not trained to generate {style!r} notation"
+            )
         task: HumanKind | None = style
         expected_kind = style
     elif direction == "human_to_yt":
-        if source_kind not in ("row", "col"):
+        if source_kind not in ("row", "col", "coord"):
             raise ValueError(
-                "human_to_yt expects [YT row start] or [YT col start] notation"
+                "human_to_yt expects row, column, or coordinate notation"
+            )
+        if supported_kinds is not None and source_kind not in supported_kinds:
+            raise ValueError(
+                f"checkpoint was not trained to read {source_kind!r} notation"
             )
         task = None
         expected_kind = "raw"
@@ -98,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text", required=True, help="canonical input notation")
     parser.add_argument(
         "--style",
-        choices=("row", "col"),
+        choices=("row", "col", "coord"),
         default="row",
         help="output style for a yt_to_human checkpoint",
     )

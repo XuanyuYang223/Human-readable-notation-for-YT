@@ -24,12 +24,22 @@ from yt_transformer.notation import Tableau
 from yt_transformer.tokenizer import HandmadeTokenizer
 from yt_transformer.train import (
     TrainingConfig,
+    build_parser,
     run_training_epoch,
     train_direction,
 )
 
 
 class TrainingConfigTest(unittest.TestCase):
+    def test_defaults_include_coordinate_notation_and_longer_sequences(self) -> None:
+        config = TrainingConfig()
+        self.assertEqual(config.human_kinds, ("row", "col", "coord"))
+        self.assertEqual(config.max_seq_len, 256)
+
+        args = build_parser().parse_args([])
+        self.assertEqual(tuple(args.human_kinds), ("row", "col", "coord"))
+        self.assertEqual(args.max_seq_len, 256)
+
     def test_rejects_invalid_core_settings(self) -> None:
         invalid_overrides = (
             {"num_tableaux": 2},
@@ -38,6 +48,18 @@ class TrainingConfigTest(unittest.TestCase):
             {"split_ratios": (0.8, float("nan"), 0.2)},
             {"human_kinds": ()},
             {"human_kinds": ("row", "row")},
+            {
+                "human_kinds": ("coord",),
+                "max_rows": 51,
+                "max_columns": 1,
+                "max_cells": 51,
+            },
+            {
+                "human_kinds": ("coord",),
+                "max_rows": 1,
+                "max_columns": 51,
+                "max_cells": 51,
+            },
             {"max_rows": 2, "max_columns": 2, "max_cells": 5},
             {"max_rows": True},
             {"epochs": 0},
@@ -64,13 +86,13 @@ class TrainingConfigTest(unittest.TestCase):
         config = TrainingConfig(
             num_tableaux=4,
             split_ratios=(0.5, 0.25, 0.25),
-            human_kinds=("row",),
+            human_kinds=("coord",),
         )
 
         values = config.checkpoint_dict()
 
         self.assertEqual(values["split_ratios"], [0.5, 0.25, 0.25])
-        self.assertEqual(values["human_kinds"], ["row"])
+        self.assertEqual(values["human_kinds"], ["coord"])
         self.assertIsInstance(values["split_ratios"], list)
         self.assertIsInstance(values["human_kinds"], list)
 
@@ -184,12 +206,22 @@ class TrainingLoopTest(unittest.TestCase):
             self.assertEqual(next(model.parameters()).device.type, "cpu")
             self.assertEqual(model.config.d_model, config.d_model)
             self.assertEqual(model.config.pad_id, tokenizer.pad_id)
+            self.assertEqual(model.supported_human_kinds, ("row",))
             self.assertEqual(checkpoint_direction(metadata), "yt_to_human")
             self.assertEqual(metadata["epoch"], 1)
             self.assertNotIn("model_state_dict", metadata)
             self.assertEqual(
                 metadata["training_config"]["human_kinds"],
                 ["row"],
+            )
+
+    def test_rsk_direction_uses_its_dedicated_training_pipeline(self) -> None:
+        with self.assertRaisesRegex(ValueError, "yt-rsk-train"):
+            train_direction(
+                "perm_to_yt",
+                output_dir=Path("unused"),
+                device=torch.device("cpu"),
+                config=TrainingConfig(),
             )
 
 

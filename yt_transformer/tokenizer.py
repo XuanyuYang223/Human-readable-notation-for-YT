@@ -1,4 +1,4 @@
-"""A fixed, hand-made tokenizer for the canonical YT notation.
+"""A fixed, hand-made tokenizer for canonical YT and permutation notation.
 
 This module intentionally has no dependency on a tokenizer library.  Surface
 markers and punctuation are mapped to the symbolic tokens from the project
@@ -11,15 +11,46 @@ from types import MappingProxyType
 from typing import Iterable, Literal, Mapping, Sequence, TypeAlias
 
 from .notation import format_notation, parse_notation
+from .rsk import format_permutation, parse_permutation
 
 
-TaskKind: TypeAlias = Literal["row", "col"]
+TaskKind: TypeAlias = Literal["row", "col", "coord"]
 
-SPECIAL_TOKENS: tuple[str, ...] = ("PAD", "BOS", "EOS", "TO_ROW", "TO_COL")
-MARKER_TOKENS: tuple[str, ...] = ("x1", "x2", "x3", "x4", "x5", "x6")
-STRUCTURE_TOKENS: tuple[str, ...] = ("s", "x")
+_LEGACY_SPECIAL_TOKENS: tuple[str, ...] = ("PAD", "BOS", "EOS", "TO_ROW", "TO_COL")
+_LEGACY_MARKER_TOKENS: tuple[str, ...] = ("x1", "x2", "x3", "x4", "x5", "x6")
+_LEGACY_STRUCTURE_TOKENS: tuple[str, ...] = ("s", "x")
+
+SPECIAL_TOKENS: tuple[str, ...] = _LEGACY_SPECIAL_TOKENS + ("TO_COORD",)
+MARKER_TOKENS: tuple[str, ...] = _LEGACY_MARKER_TOKENS + ("x7", "x8")
+STRUCTURE_TOKENS: tuple[str, ...] = _LEGACY_STRUCTURE_TOKENS + (
+    "lparen",
+    "comma",
+    "rparen",
+    "colon",
+)
 NUMBER_TOKENS: tuple[str, ...] = tuple(f"n{value}" for value in range(1, 51))
-VOCAB: tuple[str, ...] = SPECIAL_TOKENS + MARKER_TOKENS + STRUCTURE_TOKENS + NUMBER_TOKENS
+
+# Preserve every ID from the original 63-token tokenizer.  Coordinate-specific
+# control, marker, and punctuation tokens are appended so legacy token IDs stay
+# stable and the checkpoint loader can select either exact vocabulary.
+LEGACY_VOCAB: tuple[str, ...] = (
+    _LEGACY_SPECIAL_TOKENS
+    + _LEGACY_MARKER_TOKENS
+    + _LEGACY_STRUCTURE_TOKENS
+    + NUMBER_TOKENS
+)
+VOCAB: tuple[str, ...] = LEGACY_VOCAB + (
+    "TO_COORD",
+    "x7",
+    "x8",
+    "lparen",
+    "comma",
+    "rparen",
+    "colon",
+)
+# Keep the coordinate-aware 70-token vocabulary as the default.  RSK models
+# opt into this append-only superset, preserving every established token ID.
+RSK_VOCAB: tuple[str, ...] = VOCAB + ("x9", "x10")
 
 _SURFACE_TO_TOKEN: Mapping[str, str] = MappingProxyType(
     {
@@ -29,8 +60,16 @@ _SURFACE_TO_TOKEN: Mapping[str, str] = MappingProxyType(
         "[YT col end]": "x4",
         "[YT start]": "x5",
         "[YT end]": "x6",
+        "[YT coord start]": "x7",
+        "[YT coord end]": "x8",
+        "[perm start]": "x9",
+        "[perm end]": "x10",
         " ": "s",
         "|": "x",
+        "(": "lparen",
+        ",": "comma",
+        ")": "rparen",
+        ":": "colon",
         **{str(value): f"n{value}" for value in range(1, 51)},
     }
 )
@@ -43,16 +82,51 @@ _MARKER_SURFACES: tuple[str, ...] = tuple(
 _CONTROL_TOKENS = frozenset(SPECIAL_TOKENS)
 
 
+def _validate_surface(text: str) -> str:
+    """Validate one supported canonical surface and return its kind."""
+
+    if isinstance(text, str) and text.startswith("[perm"):
+        permutation = parse_permutation(text)
+        if format_permutation(permutation) != text:  # defensive and explicit
+            raise ValueError("text is not canonical permutation notation")
+        return "perm"
+
+    tableau, kind = parse_notation(text)
+    if format_notation(tableau, kind) != text:  # defensive and explicit
+        raise ValueError("text is not canonical YT notation")
+    return kind
+
+
 class HandmadeTokenizer:
     """Tokenizer with a stable, fixed vocabulary and no learned state.
 
     Vocabulary IDs are stable by construction: ``PAD`` is 0, ``BOS`` is 1,
-    ``EOS`` is 2, ``TO_ROW`` is 3, and ``TO_COL`` is 4.  The marker tokens
-    ``x1..x6``, structure tokens ``s``/``x``, and numbers ``n1..n50`` follow.
+    ``EOS`` is 2, ``TO_ROW`` is 3, and ``TO_COL`` is 4.  The original marker,
+    structure, and number IDs remain unchanged; coordinate tokens occupy IDs
+    63 through 69.
     """
 
-    def __init__(self) -> None:
-        token_to_id = {token: index for index, token in enumerate(VOCAB)}
+    def __init__(self, vocab: Sequence[str] | None = None) -> None:
+        """Create the current tokenizer, or a supported legacy variant.
+
+        Passing a vocabulary selects a task-specific/checkpoint-compatible
+        variant.  Only the original 63-token vocabulary, the coordinate-aware
+        70-token vocabulary, and its 72-token RSK superset are accepted, so
+        arbitrary checkpoint token layouts cannot silently acquire the wrong
+        surface semantics.
+        """
+
+        if vocab is None:
+            selected_vocab = VOCAB
+        else:
+            if isinstance(vocab, (str, bytes)):
+                raise TypeError("vocab must be a sequence of token strings")
+            selected_vocab = tuple(vocab)
+            if selected_vocab not in (LEGACY_VOCAB, VOCAB, RSK_VOCAB):
+                raise ValueError("unsupported tokenizer vocabulary")
+
+        self._vocab = selected_vocab
+        token_to_id = {token: index for index, token in enumerate(self._vocab)}
         self._token_to_id: Mapping[str, int] = MappingProxyType(token_to_id)
         self._id_to_token: Mapping[int, str] = MappingProxyType(
             {index: token for token, index in token_to_id.items()}
@@ -60,11 +134,11 @@ class HandmadeTokenizer:
 
     @property
     def vocab(self) -> tuple[str, ...]:
-        return VOCAB
+        return self._vocab
 
     @property
     def vocab_size(self) -> int:
-        return len(VOCAB)
+        return len(self._vocab)
 
     @property
     def token_to_id(self) -> Mapping[str, int]:
@@ -93,6 +167,10 @@ class HandmadeTokenizer:
     @property
     def to_col_id(self) -> int:
         return self._token_to_id["TO_COL"]
+
+    @property
+    def to_coord_id(self) -> int:
+        return self.token_id("TO_COORD")
 
     # Conventional aliases make the tokenizer convenient in model/data code.
     pad_token_id = pad_id
@@ -124,9 +202,7 @@ class HandmadeTokenizer:
         numbers, and mismatched marker pairs are never silently normalized.
         """
 
-        tableau, kind = parse_notation(text)
-        if format_notation(tableau, kind) != text:  # defensive and explicit
-            raise ValueError("text is not canonical YT notation")
+        kind = _validate_surface(text)
 
         tokens: list[str] = []
         position = 0
@@ -141,7 +217,7 @@ class HandmadeTokenizer:
                 continue
 
             character = text[position]
-            if character in {" ", "|"}:
+            if character in {" ", "|", "(", ",", ")", ":"}:
                 tokens.append(_SURFACE_TO_TOKEN[character])
                 position += 1
                 continue
@@ -159,6 +235,10 @@ class HandmadeTokenizer:
                 continue
 
             raise ValueError(f"unknown surface text at character {position}")
+        if any(token not in self._token_to_id for token in tokens):
+            raise ValueError(
+                f"tokenizer vocabulary does not support {kind!r} notation"
+            )
         return tokens
 
     def detokenize(self, tokens: Iterable[str]) -> str:
@@ -185,9 +265,9 @@ class HandmadeTokenizer:
                     ) from exc
                 raise ValueError(f"unknown token: {token!r}") from exc
         text = "".join(surfaces)
-        tableau, kind = parse_notation(text)
-        if format_notation(tableau, kind) != text or self.tokenize(text) != token_list:
-            raise ValueError("tokens do not form canonical YT notation")
+        _validate_surface(text)
+        if self.tokenize(text) != token_list:
+            raise ValueError("tokens do not form canonical notation")
         return text
 
     def convert_tokens_to_ids(self, tokens: Iterable[str]) -> list[int]:
@@ -209,8 +289,8 @@ class HandmadeTokenizer:
     ) -> list[int]:
         """Encode notation into IDs, optionally prefixing an output task.
 
-        ``task="row"`` inserts ``TO_ROW`` and ``task="col"`` inserts
-        ``TO_COL``.  When wrappers are enabled, the order is
+        ``task="row"`` inserts ``TO_ROW``, ``task="col"`` inserts ``TO_COL``,
+        and ``task="coord"`` inserts ``TO_COORD``.  With wrappers, the order is
         ``BOS, TO_*, <surface tokens>, EOS``.
         """
 
@@ -222,8 +302,10 @@ class HandmadeTokenizer:
             task_token = "TO_ROW"
         elif task == "col":
             task_token = "TO_COL"
+        elif task == "coord":
+            task_token = "TO_COORD"
         else:
-            raise ValueError("task must be 'row', 'col', or None")
+            raise ValueError("task must be 'row', 'col', 'coord', or None")
 
         tokens: list[str] = []
         if add_special_tokens:
@@ -260,9 +342,11 @@ Tokenizer = HandmadeTokenizer
 
 __all__ = [
     "HandmadeTokenizer",
+    "LEGACY_VOCAB",
     "MARKER_TOKENS",
     "NUMBER_TOKENS",
     "NotationTokenizer",
+    "RSK_VOCAB",
     "SPECIAL_TOKENS",
     "STRUCTURE_TOKENS",
     "TaskKind",

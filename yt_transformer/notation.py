@@ -5,24 +5,33 @@ The surface forms implemented here follow the conventions in the project notes::
     [YT start] 2 3 5 | 1 4 [YT end]
     [YT row start] 2 3 5 | 1 4 [YT row end]
     [YT col start] 2 1 | 3 4 | 5 [YT col end]
+    [YT coord start] (1,1) : 2 | (1,2) : 3 | (1,3) : 5 | (2,1) : 1 | (2,2) : 4 [YT coord end]
 
 ``raw`` and ``row`` serialize rows.  ``col`` serializes the transpose, so it is
 losslessly convertible back to the same :class:`Tableau` even for ragged rows.
+``coord`` emits every cell in one-based matrix order as ``(row,column) : value``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Iterable, Literal, TypeAlias, cast
 
 
-NotationKind: TypeAlias = Literal["raw", "row", "col"]
+NotationKind: TypeAlias = Literal["raw", "row", "col", "coord"]
 
 _MARKERS: dict[NotationKind, tuple[str, str]] = {
     "raw": ("[YT start]", "[YT end]"),
     "row": ("[YT row start]", "[YT row end]"),
     "col": ("[YT col start]", "[YT col end]"),
+    "coord": ("[YT coord start]", "[YT coord end]"),
 }
+
+_COORD_ENTRY = re.compile(
+    r"\(([1-9][0-9]*),([1-9][0-9]*)\) : ([1-9][0-9]*)",
+    re.ASCII,
+)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -89,19 +98,35 @@ def _format_rows(rows: tuple[tuple[int, ...], ...]) -> str:
     return " | ".join(" ".join(str(value) for value in row) for row in rows)
 
 
+def _format_coordinates(tableau: Tableau) -> str:
+    if len(tableau.rows) > 50 or (
+        tableau.rows and len(tableau.rows[0]) > 50
+    ):
+        raise ValueError("coordinate indices must be in the range 1..50")
+    return " | ".join(
+        f"({row_index},{column_index}) : {value}"
+        for row_index, row in enumerate(tableau.rows, start=1)
+        for column_index, value in enumerate(row, start=1)
+    )
+
+
 def format_notation(tableau: Tableau, kind: NotationKind) -> str:
     """Serialize ``tableau`` using the canonical surface form for ``kind``.
 
-    Exactly one ASCII space separates adjacent surface tokens.  For ``col``,
-    the displayed groups are columns of the original tableau.
+    Exactly one ASCII space separates adjacent surface tokens.  ``col`` groups
+    columns of the original tableau.  ``coord`` lists one-based ``(row,column)``
+    entries in row-major matrix order.
     """
 
     if not isinstance(tableau, Tableau):
         raise TypeError("tableau must be a Tableau")
     checked_kind = _validate_kind(kind)
     start, end = _MARKERS[checked_kind]
-    displayed = tableau.transpose() if checked_kind == "col" else tableau
-    body = _format_rows(displayed.rows)
+    if checked_kind == "coord":
+        body = _format_coordinates(tableau)
+    else:
+        displayed = tableau.transpose() if checked_kind == "col" else tableau
+        body = _format_rows(displayed.rows)
     if not body:
         return f"{start} {end}"
     return f"{start} {body} {end}"
@@ -125,8 +150,46 @@ def _parse_body(body: str) -> Tableau:
     return Tableau(rows)
 
 
+def _parse_coordinate_body(body: str) -> Tableau:
+    if not body:
+        return Tableau(())
+
+    rows: list[tuple[int, ...]] = []
+    current_values: list[int] = []
+    current_row = 1
+    expected_column = 1
+    for entry_text in body.split(" | "):
+        match = _COORD_ENTRY.fullmatch(entry_text)
+        if match is None:
+            raise ValueError(
+                "coordinates must use canonical '(row,column) : value' entries"
+            )
+        row, column, value = (int(field) for field in match.groups())
+        if row > 50 or column > 50:
+            raise ValueError("coordinate indices must be in the range 1..50")
+
+        if row == current_row and column == expected_column:
+            current_values.append(value)
+            expected_column += 1
+            continue
+        if row == current_row + 1 and column == 1 and current_values:
+            rows.append(tuple(current_values))
+            current_values = [value]
+            current_row += 1
+            expected_column = 2
+            continue
+        raise ValueError(
+            "coordinates must be complete one-based row-major matrix entries"
+        )
+
+    if not current_values:  # pragma: no cover - non-empty body always enters the loop
+        raise ValueError("coordinate notation contains no entries")
+    rows.append(tuple(current_values))
+    return Tableau(rows)
+
+
 def parse_notation(text: str) -> tuple[Tableau, NotationKind]:
-    """Parse a canonical ``raw``, ``row``, or ``col`` notation string.
+    """Parse a canonical ``raw``, ``row``, ``col``, or ``coord`` string.
 
     Non-canonical whitespace, unknown markers, invalid shapes, and values
     outside ``1..50`` raise :class:`ValueError` rather than being normalized.
@@ -154,8 +217,11 @@ def parse_notation(text: str) -> tuple[Tableau, NotationKind]:
     if matched_kind is None or body is None:
         raise ValueError("text does not use a recognized canonical YT marker pair")
 
-    displayed = _parse_body(body)
-    tableau = displayed.transpose() if matched_kind == "col" else displayed
+    if matched_kind == "coord":
+        tableau = _parse_coordinate_body(body)
+    else:
+        displayed = _parse_body(body)
+        tableau = displayed.transpose() if matched_kind == "col" else displayed
 
     # This single equality check also rejects subtle non-canonical cases such as
     # alternate Unicode digits or malformed column encodings.

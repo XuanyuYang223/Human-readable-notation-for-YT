@@ -10,8 +10,8 @@ from pathlib import Path
 from random import Random
 from typing import Any, cast
 
-from .checkpoint import checkpoint_direction, load_checkpoint
-from .data import Direction, HumanKind, make_translation_examples
+from .checkpoint import checkpoint_direction, checkpoint_human_kinds, load_checkpoint
+from .data import Direction, make_translation_examples
 from .evaluate import evaluate_examples
 from .notation import Tableau
 from .runtime import resolve_device
@@ -92,7 +92,7 @@ def evaluate_ood_lengths(
     seed: int,
     device_name: str,
 ) -> dict[str, Any]:
-    """Evaluate both directions and both human styles at several cell counts."""
+    """Evaluate both directions and their common human styles at several cell counts."""
 
     device = resolve_device(device_name)
     forward, forward_tokenizer, forward_metadata = load_checkpoint(
@@ -107,6 +107,15 @@ def evaluate_ood_lengths(
         raise ValueError("--human-to-yt checkpoint has the wrong direction")
     if forward_tokenizer.vocab != reverse_tokenizer.vocab:
         raise ValueError("checkpoint tokenizers do not match")
+
+    reverse_styles = set(checkpoint_human_kinds(reverse_metadata))
+    common_styles = tuple(
+        style
+        for style in checkpoint_human_kinds(forward_metadata)
+        if style in reverse_styles
+    )
+    if not common_styles:
+        raise ValueError("forward and reverse checkpoints have no human styles in common")
 
     training_config = forward_metadata.get("training_config")
     trained_max_cells = (
@@ -135,7 +144,7 @@ def evaluate_ood_lengths(
             (cast(Direction, "human_to_yt"), reverse),
         ):
             direction_metrics: dict[str, Any] = {}
-            for style in (cast(HumanKind, "row"), cast(HumanKind, "col")):
+            for style in common_styles:
                 examples = tuple(
                     example
                     for tableau in tableaux

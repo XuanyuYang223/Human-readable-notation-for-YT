@@ -1,6 +1,11 @@
 import unittest
 
-from yt_transformer.tokenizer import HandmadeTokenizer, VOCAB
+from yt_transformer.tokenizer import (
+    HandmadeTokenizer,
+    LEGACY_VOCAB,
+    RSK_VOCAB,
+    VOCAB,
+)
 
 
 class HandmadeTokenizerTests(unittest.TestCase):
@@ -9,21 +14,75 @@ class HandmadeTokenizerTests(unittest.TestCase):
         self.raw = "[YT start] 2 3 5 | 1 4 [YT end]"
         self.row = "[YT row start] 2 3 5 | 1 4 [YT row end]"
         self.col = "[YT col start] 2 1 | 3 4 | 5 [YT col end]"
+        self.coord = (
+            "[YT coord start] (1,1) : 2 | (1,2) : 3 | (1,3) : 5 | "
+            "(2,1) : 1 | (2,2) : 4 [YT coord end]"
+        )
+        self.permutation = "[perm start] 3 1 4 2 [perm end]"
 
     def test_fixed_vocabulary_and_special_ids(self) -> None:
         self.assertEqual(self.tokenizer.vocab, VOCAB)
-        self.assertEqual(self.tokenizer.vocab_size, 63)
+        self.assertEqual(self.tokenizer.vocab_size, 70)
         self.assertEqual(self.tokenizer.pad_id, 0)
         self.assertEqual(self.tokenizer.bos_id, 1)
         self.assertEqual(self.tokenizer.eos_id, 2)
         self.assertEqual(self.tokenizer.to_row_id, 3)
         self.assertEqual(self.tokenizer.to_col_id, 4)
+        # Every legacy token retains its original ID.
         self.assertEqual(self.tokenizer.token_id("x1"), 5)
         self.assertEqual(self.tokenizer.token_id("x6"), 10)
         self.assertEqual(self.tokenizer.token_id("s"), 11)
         self.assertEqual(self.tokenizer.token_id("x"), 12)
         self.assertEqual(self.tokenizer.token_id("n1"), 13)
         self.assertEqual(self.tokenizer.token_id("n50"), 62)
+        self.assertEqual(self.tokenizer.to_coord_id, 63)
+        self.assertEqual(self.tokenizer.token_id("x7"), 64)
+        self.assertEqual(self.tokenizer.token_id("x8"), 65)
+        self.assertEqual(self.tokenizer.token_id("lparen"), 66)
+        self.assertEqual(self.tokenizer.token_id("comma"), 67)
+        self.assertEqual(self.tokenizer.token_id("rparen"), 68)
+        self.assertEqual(self.tokenizer.token_id("colon"), 69)
+
+    def test_rsk_vocabulary_is_an_append_only_explicit_superset(self) -> None:
+        tokenizer = HandmadeTokenizer(vocab=RSK_VOCAB)
+
+        self.assertEqual(self.tokenizer.vocab, VOCAB)
+        self.assertEqual(self.tokenizer.vocab_size, 70)
+        self.assertEqual(RSK_VOCAB[: len(VOCAB)], VOCAB)
+        self.assertEqual(tokenizer.vocab_size, 72)
+        self.assertEqual(tokenizer.token_id("x9"), 70)
+        self.assertEqual(tokenizer.token_id("x10"), 71)
+
+    def test_rsk_tokenizer_round_trips_canonical_permutations(self) -> None:
+        tokenizer = HandmadeTokenizer(vocab=RSK_VOCAB)
+        expected_tokens = [
+            "x9",
+            "s",
+            "n3",
+            "s",
+            "n1",
+            "s",
+            "n4",
+            "s",
+            "n2",
+            "s",
+            "x10",
+        ]
+
+        self.assertEqual(tokenizer.tokenize(self.permutation), expected_tokens)
+        self.assertEqual(tokenizer.detokenize(expected_tokens), self.permutation)
+        encoded = tokenizer.encode(self.permutation)
+        self.assertEqual(encoded[0], tokenizer.bos_id)
+        self.assertEqual(encoded[-1], tokenizer.eos_id)
+        self.assertEqual(tokenizer.decode(encoded), self.permutation)
+
+    def test_non_rsk_vocabularies_reject_permutation_markers_cleanly(self) -> None:
+        for vocab in (VOCAB, LEGACY_VOCAB):
+            tokenizer = HandmadeTokenizer(vocab=vocab)
+            with self.subTest(size=len(vocab)), self.assertRaisesRegex(
+                ValueError, "does not support 'perm'"
+            ):
+                tokenizer.tokenize(self.permutation)
 
     def test_surface_tokenization_uses_markers_spaces_bars_and_atomic_numbers(self) -> None:
         self.assertEqual(
@@ -47,9 +106,30 @@ class HandmadeTokenizerTests(unittest.TestCase):
             ],
         )
         self.assertEqual(self.tokenizer.detokenize(self.tokenizer.tokenize(self.col)), self.col)
+        self.assertEqual(
+            self.tokenizer.tokenize("[YT coord start] (1,1) : 3 [YT coord end]"),
+            [
+                "x7",
+                "s",
+                "lparen",
+                "n1",
+                "comma",
+                "n1",
+                "rparen",
+                "s",
+                "colon",
+                "s",
+                "n3",
+                "s",
+                "x8",
+            ],
+        )
+        self.assertEqual(
+            self.tokenizer.detokenize(self.tokenizer.tokenize(self.coord)), self.coord
+        )
 
     def test_encode_decode_round_trip_for_every_notation_kind(self) -> None:
-        for text in (self.raw, self.row, self.col):
+        for text in (self.raw, self.row, self.col, self.coord):
             with self.subTest(text=text):
                 encoded = self.tokenizer.encode(text)
                 self.assertEqual(encoded[0], self.tokenizer.bos_id)
@@ -59,18 +139,28 @@ class HandmadeTokenizerTests(unittest.TestCase):
     def test_encode_inserts_task_after_bos(self) -> None:
         row_ids = self.tokenizer.encode(self.raw, task="row")
         col_ids = self.tokenizer.encode(self.raw, task="col")
+        coord_ids = self.tokenizer.encode(self.raw, task="coord")
         self.assertEqual(row_ids[:2], [self.tokenizer.bos_id, self.tokenizer.to_row_id])
         self.assertEqual(col_ids[:2], [self.tokenizer.bos_id, self.tokenizer.to_col_id])
+        self.assertEqual(
+            coord_ids[:2], [self.tokenizer.bos_id, self.tokenizer.to_coord_id]
+        )
         self.assertEqual(self.tokenizer.decode(row_ids), self.raw)
         self.assertEqual(self.tokenizer.decode(col_ids), self.raw)
+        self.assertEqual(self.tokenizer.decode(coord_ids), self.raw)
 
         unwrapped = self.tokenizer.encode(self.raw, add_special_tokens=False, task="row")
         self.assertEqual(unwrapped[0], self.tokenizer.to_row_id)
         self.assertEqual(self.tokenizer.decode(unwrapped), self.raw)
 
     def test_decode_ignores_padding_and_control_tokens_by_default(self) -> None:
-        ids = [self.tokenizer.pad_id, *self.tokenizer.encode(self.row), self.tokenizer.pad_id]
-        self.assertEqual(self.tokenizer.decode(ids), self.row)
+        ids = [
+            self.tokenizer.pad_id,
+            self.tokenizer.to_coord_id,
+            *self.tokenizer.encode(self.coord),
+            self.tokenizer.pad_id,
+        ]
+        self.assertEqual(self.tokenizer.decode(ids), self.coord)
         with self.assertRaises(ValueError):
             self.tokenizer.decode(ids, skip_special_tokens=False)
 
@@ -85,6 +175,12 @@ class HandmadeTokenizerTests(unittest.TestCase):
             "[YT start] 0 [YT end]",
             "[YT start] 51 [YT end]",
             "[YT start] two [YT end]",
+            "[YT coord start] (1, 1) : 2 [YT coord end]",
+            "[YT coord start] (1,1): 2 [YT coord end]",
+            (
+                "[YT coord start] (1,1) : 2 | (1,3) : 3 "
+                "[YT coord end]"
+            ),
         )
         for text in invalid_texts:
             with self.subTest(text=text), self.assertRaises(ValueError):
@@ -102,6 +198,13 @@ class HandmadeTokenizerTests(unittest.TestCase):
             self.tokenizer.id_token(999)
         with self.assertRaises(ValueError):
             self.tokenizer.encode(self.raw, task="raw")  # type: ignore[arg-type]
+
+    def test_legacy_vocabulary_rejects_coordinate_features_cleanly(self) -> None:
+        tokenizer = HandmadeTokenizer(vocab=LEGACY_VOCAB)
+        with self.assertRaisesRegex(ValueError, "does not support 'coord'"):
+            tokenizer.tokenize(self.coord)
+        with self.assertRaisesRegex(ValueError, "unknown token"):
+            _ = tokenizer.to_coord_id
 
 
 if __name__ == "__main__":

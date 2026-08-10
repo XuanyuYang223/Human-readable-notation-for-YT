@@ -1,8 +1,8 @@
 """Synthetic paired data for translating Young-tableau notation.
 
-The split is performed on tableaux *before* row/column and direction variants
-are expanded.  This prevents the same mathematical object from leaking across
-train, validation, and test data under a different surface notation.
+The split is performed on tableaux *before* row/column/coordinate and direction
+variants are expanded.  This prevents the same mathematical object from leaking
+across train, validation, and test data under a different surface notation.
 """
 
 from __future__ import annotations
@@ -21,12 +21,12 @@ from .notation import Tableau, format_notation
 
 
 Direction: TypeAlias = Literal["yt_to_human", "human_to_yt"]
-HumanKind: TypeAlias = Literal["row", "col"]
+HumanKind: TypeAlias = Literal["row", "col", "coord"]
 SplitName: TypeAlias = Literal["train", "val", "test"]
 
 SPLIT_NAMES: tuple[SplitName, ...] = ("train", "val", "test")
 DEFAULT_DIRECTIONS: tuple[Direction, ...] = ("yt_to_human", "human_to_yt")
-DEFAULT_HUMAN_KINDS: tuple[HumanKind, ...] = ("row", "col")
+DEFAULT_HUMAN_KINDS: tuple[HumanKind, ...] = ("row", "col", "coord")
 
 
 class EncodesNotation(Protocol):
@@ -46,9 +46,9 @@ class TranslationExample:
     """One text-to-text example, plus its leakage-safe group identity.
 
     ``source_task`` is set only for ``yt_to_human`` examples.  The tokenizer
-    turns it into a ``TO_ROW`` or ``TO_COL`` token immediately after ``BOS``.
-    Reverse examples need no control token because their row/column surface
-    marker already identifies the input notation.
+    turns it into a ``TO_ROW``, ``TO_COL``, or ``TO_COORD`` token immediately
+    after ``BOS``.  Reverse examples need no control token because their human
+    notation surface marker already identifies the input notation.
     """
 
     tableau: Tableau

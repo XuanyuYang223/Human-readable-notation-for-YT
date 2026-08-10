@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
+from unittest.mock import patch
 
+from yt_transformer.evaluate import EvaluationMetrics
 from yt_transformer.ood import (
     compact_shape,
+    evaluate_ood_lengths,
     generate_length_stress_tableaux,
     stress_shape,
 )
+from yt_transformer.tokenizer import HandmadeTokenizer
 
 
 class OODGenerationTests(unittest.TestCase):
@@ -38,6 +43,48 @@ class OODGenerationTests(unittest.TestCase):
         self.assertEqual(len(values), 54)
         self.assertEqual(set(values), set(range(1, 51)))
         self.assertLess(len(set(values)), len(values))
+
+    def test_ood_evaluates_only_checkpoint_style_intersection(self) -> None:
+        tokenizer = HandmadeTokenizer()
+        forward_metadata = {
+            "direction": "yt_to_human",
+            "training_config": {"human_kinds": ["row", "coord"], "max_cells": 20},
+        }
+        reverse_metadata = {
+            "direction": "human_to_yt",
+            "training_config": {"human_kinds": ["col", "coord"], "max_cells": 20},
+        }
+        evaluated_styles: list[str] = []
+
+        def fake_evaluate(model, tokenizer, examples, *, batch_size):
+            del model, tokenizer, batch_size
+            evaluated_styles.extend(example.human_kind for example in examples)
+            return EvaluationMetrics(1, 0.0, 1.0, 1.0, 1.0, 0.0)
+
+        with (
+            patch(
+                "yt_transformer.ood.load_checkpoint",
+                side_effect=(
+                    (object(), tokenizer, forward_metadata),
+                    (object(), tokenizer, reverse_metadata),
+                ),
+            ),
+            patch("yt_transformer.ood.evaluate_examples", side_effect=fake_evaluate),
+        ):
+            report = evaluate_ood_lengths(
+                forward_checkpoint=Path("forward.pt"),
+                reverse_checkpoint=Path("reverse.pt"),
+                entries_values=(1,),
+                samples=1,
+                batch_size=1,
+                seed=5,
+                device_name="cpu",
+            )
+
+        metrics = report["cases"]["1"]["metrics"]
+        self.assertEqual(set(metrics["yt_to_human"]), {"coord"})
+        self.assertEqual(set(metrics["human_to_yt"]), {"coord"})
+        self.assertEqual(evaluated_styles, ["coord", "coord"])
 
 
 if __name__ == "__main__":

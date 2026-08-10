@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 
 from .checkpoint import Direction, save_checkpoint
 from .data import (
+    DEFAULT_HUMAN_KINDS,
     HumanKind,
     TranslationDataset,
     generate_translation_splits,
@@ -34,7 +35,7 @@ class TrainingConfig:
 
     num_tableaux: int = 4_000
     split_ratios: tuple[float, float, float] = (0.8, 0.1, 0.1)
-    human_kinds: tuple[HumanKind, ...] = ("row", "col")
+    human_kinds: tuple[HumanKind, ...] = DEFAULT_HUMAN_KINDS
     max_rows: int = 5
     max_columns: int = 8
     max_cells: int = 20
@@ -50,7 +51,7 @@ class TrainingConfig:
     num_layers: int = 2
     dim_feedforward: int = 128
     dropout: float = 0.1
-    max_seq_len: int = 128
+    max_seq_len: int = 256
     tie_embeddings: bool = True
     seed: int = 42
 
@@ -70,10 +71,10 @@ class TrainingConfig:
             raise ValueError("split_ratios must contain three positive finite values")
         if (
             not self.human_kinds
-            or any(kind not in ("row", "col") for kind in self.human_kinds)
+            or any(kind not in DEFAULT_HUMAN_KINDS for kind in self.human_kinds)
             or len(set(self.human_kinds)) != len(self.human_kinds)
         ):
-            raise ValueError("human_kinds must contain row and/or col")
+            raise ValueError("human_kinds must contain row, col, and/or coord")
         if any(
             not is_int(value) or value <= 0
             for value in (self.max_rows, self.max_columns, self.max_cells)
@@ -81,6 +82,11 @@ class TrainingConfig:
             raise ValueError("shape limits must be positive")
         if self.max_cells > self.max_rows * self.max_columns:
             raise ValueError("max_cells cannot exceed max_rows * max_columns")
+        if "coord" in self.human_kinds and (
+            min(self.max_rows, self.max_cells) > 50
+            or min(self.max_columns, self.max_cells) > 50
+        ):
+            raise ValueError("coordinate row and column indices must fit in 1..50")
         if any(
             not is_int(value) or value <= 0
             for value in (self.epochs, self.batch_size)
@@ -371,6 +377,8 @@ def train_direction(
 ) -> TrainingResult:
     """Train one translation direction and retain its best validation checkpoint."""
 
+    if direction == "perm_to_yt":
+        raise ValueError("perm_to_yt must be trained with train_rsk or yt-rsk-train")
     seed_everything(config.seed + (0 if direction == "yt_to_human" else 10_000))
     tokenizer = HandmadeTokenizer()
     train_loader, val_loader, max_new_tokens, split_counts = _build_loaders(
@@ -490,7 +498,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=(0.8, 0.1, 0.1),
     )
     parser.add_argument(
-        "--human-kinds", nargs="+", choices=("row", "col"), default=("row", "col")
+        "--human-kinds",
+        nargs="+",
+        choices=DEFAULT_HUMAN_KINDS,
+        default=DEFAULT_HUMAN_KINDS,
     )
     parser.add_argument("--max-rows", type=int, default=5)
     parser.add_argument("--max-columns", type=int, default=8)
@@ -512,7 +523,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-layers", type=int, default=2)
     parser.add_argument("--dim-feedforward", type=int, default=128)
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--max-seq-len", type=int, default=128)
+    parser.add_argument("--max-seq-len", type=int, default=256)
     parser.add_argument(
         "--tie-embeddings",
         action=argparse.BooleanOptionalAction,

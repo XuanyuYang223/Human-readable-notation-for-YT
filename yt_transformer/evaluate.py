@@ -13,8 +13,14 @@ import torch
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from .checkpoint import Direction, checkpoint_direction, load_checkpoint
+from .checkpoint import (
+    Direction,
+    checkpoint_direction,
+    checkpoint_human_kinds,
+    load_checkpoint,
+)
 from .data import (
+    DEFAULT_HUMAN_KINDS,
     HumanKind,
     TranslationDataset,
     TranslationExample,
@@ -51,17 +57,17 @@ def test_examples_from_metadata(
 ) -> tuple[TranslationExample, ...]:
     """Recreate the exact held-out synthetic split described by a checkpoint."""
 
+    if direction == "perm_to_yt":
+        raise ValueError(
+            "perm_to_yt checkpoints must be evaluated with yt-rsk-evaluate"
+        )
     config = metadata.get("training_config")
     if not isinstance(config, Mapping):
         raise ValueError("checkpoint does not contain a training_config mapping")
-    human_values = config.get("human_kinds")
+    human_kinds = checkpoint_human_kinds(metadata)
     ratio_values = config.get("split_ratios")
-    if not isinstance(human_values, (list, tuple)) or not human_values:
-        raise ValueError("checkpoint has invalid human_kinds")
     if not isinstance(ratio_values, (list, tuple)) or len(ratio_values) != 3:
         raise ValueError("checkpoint has invalid split_ratios")
-    if any(value not in ("row", "col") for value in human_values):
-        raise ValueError("checkpoint has an unknown human notation kind")
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in ratio_values):
         raise ValueError("checkpoint has invalid split ratios")
 
@@ -72,7 +78,7 @@ def test_examples_from_metadata(
         split_seed=seed + 1,
         split_ratios=tuple(float(value) for value in ratio_values),
         directions=(direction,),
-        human_kinds=cast(tuple[HumanKind, ...], tuple(human_values)),
+        human_kinds=human_kinds,
         max_rows=_config_value(config, "max_rows", int),
         max_columns=_config_value(config, "max_columns", int),
         max_cells=_config_value(config, "max_cells", int),
@@ -192,11 +198,21 @@ def evaluate_round_trip(
     examples: Sequence[TranslationExample],
     *,
     limit_tableaux: int = 100,
+    human_kinds: Sequence[HumanKind] | None = None,
 ) -> dict[str, float | int]:
-    """Measure raw → human → raw exact accuracy for both human styles."""
+    """Measure raw → human → raw accuracy for the requested human styles."""
 
     if limit_tableaux <= 0:
         raise ValueError("limit_tableaux must be positive")
+    styles = tuple(
+        dict.fromkeys(
+            example.human_kind for example in examples
+        )
+        if human_kinds is None
+        else dict.fromkeys(human_kinds)
+    )
+    if not styles or any(style not in DEFAULT_HUMAN_KINDS for style in styles):
+        raise ValueError("human_kinds must contain row, col, and/or coord")
     unique = []
     seen_keys = set()
     for example in examples:
@@ -211,7 +227,7 @@ def evaluate_round_trip(
     failures = 0
     for tableau in unique:
         raw = format_notation(tableau, "raw")
-        for style in ("row", "col"):
+        for style in styles:
             attempts += 1
             try:
                 human = translate(
@@ -219,7 +235,7 @@ def evaluate_round_trip(
                     tokenizer,
                     "yt_to_human",
                     raw,
-                    style=cast(HumanKind, style),
+                    style=style,
                 )
                 reconstructed = translate(
                     reverse_model,
@@ -269,6 +285,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     for path in args.checkpoint:
         model, tokenizer, metadata = load_checkpoint(path, device=device)
         direction = checkpoint_direction(metadata)
+        if direction == "perm_to_yt":
+            raise SystemExit(
+                "perm_to_yt checkpoints must be evaluated with yt-rsk-evaluate"
+            )
         if direction in loaded:
             raise SystemExit(f"duplicate {direction} checkpoint")
         loaded[direction] = (model, tokenizer, metadata)
@@ -282,18 +302,27 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     if set(loaded) == {"yt_to_human", "human_to_yt"}:
         forward, tokenizer, forward_metadata = loaded["yt_to_human"]
-        reverse, reverse_tokenizer, _ = loaded["human_to_yt"]
+        reverse, reverse_tokenizer, reverse_metadata = loaded["human_to_yt"]
         if tokenizer.vocab != reverse_tokenizer.vocab:  # defensive; loaders validate current vocab
             raise ValueError("forward and reverse tokenizer vocabularies differ")
         forward_examples = test_examples_from_metadata(
             forward_metadata, "yt_to_human"
         )
+        reverse_styles = set(checkpoint_human_kinds(reverse_metadata))
+        common_styles = tuple(
+            style
+            for style in checkpoint_human_kinds(forward_metadata)
+            if style in reverse_styles
+        )
+        if not common_styles:
+            raise ValueError("forward and reverse checkpoints have no human styles in common")
         report["round_trip"] = evaluate_round_trip(
             forward,
             reverse,
             tokenizer,
             forward_examples,
             limit_tableaux=args.round_trip_limit,
+            human_kinds=common_styles,
         )
 
     print(json.dumps(report, indent=2, sort_keys=True))

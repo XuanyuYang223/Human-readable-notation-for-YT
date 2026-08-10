@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yt-human-readable-transformer"
-version = "0.1.0"
-description = "Two small Transformers for translating Young-tableau notation"
+version = "0.3.0"
+description = "Transformers and exact tools for Young-tableau notation and RSK"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["torch>=2.1"]
@@ -16,6 +16,10 @@ yt-train = "yt_transformer.train:main"
 yt-infer = "yt_transformer.infer:main"
 yt-evaluate = "yt_transformer.evaluate:main"
 yt-ood = "yt_transformer.ood:main"
+yt-rsk = "yt_transformer.rsk_convert:main"
+yt-rsk-train = "yt_transformer.rsk_train:main"
+yt-rsk-infer = "yt_transformer.rsk_infer:main"
+yt-rsk-evaluate = "yt_transformer.rsk_evaluate:main"
 
 [tool.setuptools.packages.find]
 include = ["yt_transformer*"]

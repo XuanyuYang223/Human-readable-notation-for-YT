@@ -1,4 +1,4 @@
-"""Deterministic reference conversion for the three notation forms."""
+"""Deterministic reference conversion for the four notation forms."""
 
 from __future__ import annotations
 
@@ -21,10 +21,10 @@ def convert_notation(text: str, target: NotationKind) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Convert raw/row/column YT notation deterministically."
+        description="Convert raw/row/column/coordinate YT notation deterministically."
     )
     parser.add_argument("text", help="canonical notation string (quote it in a shell)")
-    parser.add_argument("--to", choices=("raw", "row", "col"), required=True)
+    parser.add_argument("--to", choices=("raw", "row", "col", "coord"), required=True)
     return parser
 
 

@@ -109,6 +109,9 @@ class Seq2SeqTransformer(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.config = config
+        # Populated by ``load_checkpoint`` when training metadata records the
+        # supported output/input styles.  Fresh models remain unrestricted.
+        self.supported_human_kinds: tuple[str, ...] | None = None
 
         self.src_embedding = nn.Embedding(
             config.src_vocab_size,

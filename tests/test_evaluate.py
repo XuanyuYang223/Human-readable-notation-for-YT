@@ -14,6 +14,7 @@ from yt_transformer.data import (
 )
 from yt_transformer.evaluate import (
     evaluate_examples,
+    evaluate_round_trip,
     test_examples_from_metadata as rebuild_test_examples,
 )
 from yt_transformer.notation import Tableau
@@ -73,7 +74,7 @@ class MetadataReconstructionTests(unittest.TestCase):
             "num_tableaux": 12,
             "seed": 29,
             "split_ratios": [0.5, 0.25, 0.25],
-            "human_kinds": ["row", "col"],
+            "human_kinds": ["row", "col", "coord"],
             "max_rows": 3,
             "max_columns": 4,
             "max_cells": 8,
@@ -100,7 +101,8 @@ class MetadataReconstructionTests(unittest.TestCase):
                 self.assertTrue(rebuilt)
                 self.assertTrue(all(example.direction == direction for example in rebuilt))
                 self.assertEqual(
-                    {example.human_kind for example in rebuilt}, {"row", "col"}
+                    {example.human_kind for example in rebuilt},
+                    {"row", "col", "coord"},
                 )
 
     def test_rejects_incomplete_or_invalid_training_metadata(self) -> None:
@@ -115,6 +117,9 @@ class MetadataReconstructionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid 'seed'"):
             rebuild_test_examples(boolean_seed, "yt_to_human")
 
+        with self.assertRaisesRegex(ValueError, "yt-rsk-evaluate"):
+            rebuild_test_examples(self.metadata, "perm_to_yt")
+
 
 class EvaluationMetricTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -123,7 +128,7 @@ class EvaluationMetricTests(unittest.TestCase):
         self.example = make_translation_examples(
             self.tableau,
             directions=("yt_to_human",),
-            human_kinds=("row",),
+            human_kinds=("coord",),
         )[0]
         self.target_ids = self.tokenizer.encode(self.example.target)
 
@@ -206,6 +211,25 @@ class EvaluationMetricTests(unittest.TestCase):
                 (self.example,),
                 batch_size=0,
             )
+
+    def test_coordinate_only_round_trip_uses_requested_common_style(self) -> None:
+        raw = "[YT start] 2 3 5 | 1 4 [YT end]"
+        coord_example = self.example
+        forward = self._model(self.tokenizer.encode(coord_example.target))
+        reverse = self._model(self.tokenizer.encode(raw))
+
+        metrics = evaluate_round_trip(
+            forward,  # type: ignore[arg-type]
+            reverse,  # type: ignore[arg-type]
+            self.tokenizer,
+            (coord_example,),
+            limit_tableaux=1,
+            human_kinds=("coord",),
+        )
+
+        self.assertEqual(metrics["attempts"], 1)
+        self.assertEqual(metrics["exact_match"], 1.0)
+        self.assertEqual(metrics["invalid_pipeline_rate"], 0.0)
 
 
 if __name__ == "__main__":
